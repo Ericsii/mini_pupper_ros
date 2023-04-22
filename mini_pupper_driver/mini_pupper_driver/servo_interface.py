@@ -21,8 +21,15 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from trajectory_msgs.msg import JointTrajectory
+from sensor_msgs.msg import JointState
 from MangDang.mini_pupper.HardwareInterface import HardwareInterface
 
+try:
+    from MangDang.mini_pupper.ESP32Interface import ESP32Interface
+except Exception as e:
+    pass
+
+ENCODE2RAD = 300. / 180. * np.pi / 1024.
 
 class ServoInterface(Node):
     def __init__(self):
@@ -31,6 +38,14 @@ class ServoInterface(Node):
             JointTrajectory, '/joint_group_effort_controller/joint_trajectory',
             self.cmd_callback, 1)
         self.hardware_interface = HardwareInterface()
+
+        # TODO: Use hardware version to determine which interface to use
+        if ESP32Interface is not None:
+            self.esp32_interface = ESP32Interface()
+            self.joint_states_publisher = self.create_publisher(
+                JointState, '/joint_states', 1)
+            self.joint_states_timer = self.create_timer(
+                0.01, self.joint_states_publish)
 
     def cmd_callback(self, msg):
         joint_positions = msg.points[0].positions
@@ -55,6 +70,43 @@ class ServoInterface(Node):
         ])
         self.hardware_interface.set_actuator_postions(joint_angles)
 
+    def get_harware_version(self):
+        # TODO: add hardware version detection
+        return 'V2'
+
+    def position_to_angle(self, positions):
+        angles = []
+        for position in positions:
+            angles.append(position * ENCODE2RAD)
+        return angles
+
+    def joint_states_publish(self):
+        time = self.get_clock().now()
+        position_data = self.esp32_interface.servos_get_position()
+        print(position_data)
+        # effort_data = self.esp32_interface.servos_get_load()
+
+        joint_states = JointState()
+        joint_states.header.stamp = time.to_msg()
+        joint_states.name = [
+            'base_rf1', 'rf1_rf2', 'rf2_rf3',
+            'base_lf1', 'lf1_lf2', 'lf2_lf3',
+            'base_rb1', 'rb1_rb2', 'rb2_rb3'
+            'base_lb1', 'lb1_lb2', 'lb2_lb3',
+        ]
+        joint_states.position = self.position_to_angle([
+            position_data[0], position_data[4], position_data[8] -
+            position_data[4],
+            position_data[1], position_data[5], position_data[9] -
+            position_data[5],
+            position_data[2], position_data[6], position_data[10] -
+            position_data[6],
+            position_data[3], position_data[7], position_data[11] -
+            position_data[7],
+        ])
+        # TODO: add effort data
+        joint_states.effort = []
+        self.joint_states_publisher.publish(joint_states)
 
 def main(args=None):
     rclpy.init(args=args)
